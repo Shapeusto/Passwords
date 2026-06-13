@@ -1,0 +1,107 @@
+FILE: main.cpp | 986 lines | C++ | Windows only
+DATA: ulohy.txt    — IV(16B) + AES-256-CBC ciphertext
+      projekty.txt — IV(16B) + AES-256-CBC ciphertext
+      auth.dat     — salt(16B) + SHA-256(key)(32B)
+
+SECTIONS
+12  FARBY              ANSI color constants + tlacLogo
+61  SIFROVANIE         PBKDF2+AES: sha256, pbkdf2, citajHesloSkryte, aesEncrypt, aesDecrypt, ulozEncrypted, nacitajDecrypted, inicializujSifrovanie
+281 ULOZISKO-ULOHY     ulozDoSuboru, nacitajZoSuboru
+300 ULOZISKO-PROJEKTY  structs + ulozProjektyDoSuboru, nacitajProjektyZoSuboru
+353 SPRAVA-ULOH        spravujUlohy()
+478 SPRAVA-PROJEKTOV   maSkovat, maskujHeslo, skopirujDoSchranky, specialneVlozenie, spravujProjekt, spravujProjekty
+833 VSTUPNY-BOD        zmenHeslo, main()
+
+GLOBALS
+68  KLUC            vector<uint8_t>  AES-256 key (32B), set during inicializujSifrovanie
+17  ZLTA            string  \033[38;2;219;255;0m  #DBFF00
+18  CERVENA         string  \033[38;2;253;114;45m #FD722D
+19  RESET           string  \033[0m
+20  DARK            string  \033[38;2;59;59;59m
+23  REVERZ_ZLTA     string  yellow bg + black text
+24  REVERZ_CERVENA  string  red bg + black text
+
+STRUCTS
+307 PolozkaHesla — nazov string, heslo string
+312 Projekt      — nazov string, polozky vector<PolozkaHesla>
+
+NOTE: Section headers stored as PolozkaHesla with heslo="" (empty).
+      ENTER on header is blocked (only edits entries with non-empty heslo).
+      "--- Other ---" is the single shared section for all A-add entries.
+      DEL on header deletes entire section. DEL on last entry auto-removes empty header.
+
+FUNCTIONS
+26  tlacLogo(bool sGradientom) -> void                       renders ASCII logo (colored gradient or DARK)
+71  sha256(const string& data) -> vector<uint8_t>            BCrypt SHA-256
+87  pbkdf2(const string& heslo, const vector<uint8_t>& salt) -> vector<uint8_t>   PBKDF2-SHA256, 100k iterations, 32B output
+101 citajHesloSkryte() -> string                             hidden input (* per char), ESC = cancel
+119 aesEncrypt(const string& plaintext) -> vector<uint8_t>   AES-256-CBC, random IV; returns IV(16B)+ciphertext
+154 aesDecrypt(const vector<uint8_t>& data) -> string        AES-256-CBC decrypt; expects IV(16B)+ciphertext
+183 ulozEncrypted(const string& obsah, const string& cesta)  aesEncrypt → binary file write
+191 nacitajDecrypted(const string& cesta) -> string          binary file read → aesDecrypt
+201 inicializujSifrovanie() -> bool                          first run: set password+salt→auth.dat; else: verify (3 attempts); sets global KLUC
+284 ulozDoSuboru(vector<string>& ulohy)                      build \n-joined string → ulozEncrypted("ulohy.txt")
+290 nacitajZoSuboru() -> vector<string>                      nacitajDecrypted → istringstream parse
+317 ulozProjektyDoSuboru(vector<Projekt>& projekty)          build formatted string → ulozEncrypted("projekty.txt")
+330 nacitajProjektyZoSuboru() -> vector<Projekt>             nacitajDecrypted → istringstream parse (try-catch on stoi)
+357 ziskajAktualnyCas() -> string                            returns current timestamp (DD.MM.YYYY HH:MM:SS)
+373 spravujUlohy(vector<string>& ulohy)                      interactive list: up/down/A=add/enter=edit/del+confirm/esc|backspace=back
+486 maSkovat(const string& nazov) -> bool                    false for known non-sensitive template fields; true (mask) by default
+500 maskujHeslo(const string& heslo) -> string               shows first+last char with ****** between (<=2 chars -> all *)
+505 skopirujDoSchranky(const string& text)                   Windows clipboard via OpenClipboard/SetClipboardData
+519 specialneVlozenie(Projekt& p, vector<Projekt>& all)      template selection menu (7 types) + sequential field prompts; prepends "--- name ---" header
+584 spravujProjekt(Projekt& p, vector<Projekt>& all)         A=add (into "--- Other ---"), S=special add, enter=edit (skips headers), del+section logic, C=copy, esc|backspace=back
+755 spravujProjekty(vector<Projekt>& projekty)               W/E=reorder projects, A=add, enter=open, del=delete, esc|backspace=back; shows (N items) count
+833 zmenHeslo(vector<string>& ulohy, vector<Projekt>& p)     verify old password, new salt+PBKDF2, re-encrypt both files, update auth.dat
+899 main()                                                   entry point
+
+SECURITY MODEL
+KDF:        PBKDF2-SHA256, 100k iterations, random 16B salt → 32B AES key
+Cipher:     AES-256-CBC, random 16B IV per file write (BCrypt BCRYPT_BLOCK_PADDING)
+auth.dat:   salt(16B) + SHA-256(key)(32B) — key never stored, only verifier
+Brute-force: ~200ms per guess (PBKDF2), 3 attempts then exit
+
+SPECIAL ADD TEMPLATES (specialneVlozenie, line 519)
+Fields per template (struct Pole: nazov, volitelne):
+  FTP / FTPS             Host/IP, Port, Username, Password
+  SFTP / SSH             Host/IP, Port, Username, Password/SSH Key
+  Web Admin (CMS/Web)    Login URL, Username/Email, Password
+  Hosting Control Panel  Panel URL, Username, Password, 2FA Code(optional)
+  Database (MySQL/pgSQL) Host/Server, Database name, Username, Password
+  Git (GitHub/GitLab)    Repository URL, Username, PAT/SSH Key
+  E-mail (SMTP/IMAP)     Server, Port, Email address, Password
+
+MASKING LOGIC (maSkovat, line 486)
+NOT masked: Host/IP, Port, Username, Username/Email, Login URL,
+  Panel URL, Repository URL, Host/Server, Database name, Server, Email address
+MASKED by default: everything else (Password, PAT/SSH Key, 2FA Code, manual entries)
+
+DELETE LOGIC (spravujProjekt, ~line 639)
+DEL on header  → "Delete entire section?" → removes header + all its entries
+DEL on entry   → "Delete this entry?" → removes entry; auto-removes any empty header left behind
+"--- Other ---" → always single instance; A-add finds it anywhere and appends to it
+
+MAIN BLOCKS
+900-912  ANSI init — SetConsoleMode 0x0004 + SetConsoleOutputCP(65001)
+914      auth — inicializujSifrovanie(); exits if false
+916-917  load — nacitajZoSuboru(), nacitajProjektyZoSuboru()
+919-920  state — indexVolby(0-2), beziProgram
+922-944  menu render — gradient logo, 3 items, REVERZ on selected
+947-961  input — arrows(224+72/80) wrap 0-2, enter=13, C=change password
+962-964  C handler — zmenHeslo(ulohy, projekty)
+968-970  action 0 — spravujUlohy()
+971-973  action 1 — spravujProjekty()
+974-981  action 2 — exit screen: message + DARK logo + "developed by shapeusto.com"
+
+KEYS (_getch)
+224+72  arrow up
+224+80  arrow down
+224+83  delete
+13      enter
+27      esc       — back/exit (all interactive views)
+8       backspace — same as esc (all interactive views)
+65/97   A/a — add entry (spravujUlohy, spravujProjekt, spravujProjekty)
+67/99   C/c — copy password (spravujProjekt); change master password (main menu)
+83/115  S/s — special add via template (spravujProjekt only)
+87/119  W/w — move project up (spravujProjekty only)
+69/101  E/e — move project down (spravujProjekty only)
